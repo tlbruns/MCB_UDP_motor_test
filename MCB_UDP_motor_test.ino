@@ -16,8 +16,9 @@
 // GLOBAL VARIABLES
 
 // Motor Control Board
-const uint8_t MCBmodules_num = 6; // number of modules (i.e. motors) plugged into this board
+const int8_t MCBmodules_num = 6; // number of modules (i.e. motors) plugged into this board
 MCB MotorBoard(MCBmodules_num);	// construct motor control board
+int8_t currentMotorSelected = 0; // for manual control using Up/Down buttons
 
 // toggle LEDs for timing w/oscilloscope
 bool pidLedState = false;
@@ -59,6 +60,8 @@ EthernetUDP Udp;
 //----------------------------------------------------------------//
 void setup()
 {
+	MotorBoard.waitForButtonHold(); // wait until Menu/Up/Down have been held for 2 seconds
+
 	MotorBoard.init();
 	
 	for (int ii = 0; ii < MCBmodules_num; ii++)
@@ -90,13 +93,13 @@ void PIDTimerISR(void)
 {
 	cli(); // disable all interrupts to ensure this process completes sequentially
 
-	pidLedState = !pidLedState; // blink LED for timing with oscilloscope
-	MotorBoard.setLEDG(0, pidLedState);
+	//pidLedState = !pidLedState; // blink LED for timing with oscilloscope
+	//MotorBoard.setLEDG(0, pidLedState);
 
 	MotorBoard.stepPID();
 	
-	pidLedState = !pidLedState;
-	MotorBoard.setLEDG(0, pidLedState);
+	//pidLedState = !pidLedState;
+	//MotorBoard.setLEDG(0, pidLedState);
 
 	sei();
 }
@@ -107,8 +110,8 @@ void UDPTimerISR(void)
 {
 	cli(); // disable all interrupts to ensure this process completes sequentially
 
-	udpLedState = !udpLedState;
-	MotorBoard.setLEDG(1, udpLedState);
+	//udpLedState = !udpLedState;
+	//MotorBoard.setLEDG(1, udpLedState);
 
 	// if there's data available, read a packet
 	int packetSize = Udp.parsePacket();
@@ -122,8 +125,8 @@ void UDPTimerISR(void)
 		}
 	}
 
-	udpLedState = !udpLedState;
-	MotorBoard.setLEDG(1, udpLedState);
+	//udpLedState = !udpLedState;
+	//MotorBoard.setLEDG(1, udpLedState);
 
 	sei();
 }
@@ -132,8 +135,8 @@ void UDPTimerISR(void)
 
 void buttonTimerISR(void)
 {
-	buttonLedState = !buttonLedState; // blink LED for timing with oscilloscope
-	MotorBoard.setLEDG(2, buttonLedState);
+	//buttonLedState = !buttonLedState; // blink LED for timing with oscilloscope
+	//MotorBoard.setLEDG(2, buttonLedState);
 
 	// check Local <-> Remote switch on motherboard
 	if (!digitalReadFast(MotorBoard.pins.CTRL)) { // 'Remote' option
@@ -149,19 +152,42 @@ void buttonTimerISR(void)
 	}
 	else { // 'Local' option
 		MotorBoard.readButtons();
-		if (MotorBoard.isUpPressed()) {
+
+		if (MotorBoard.isMenuPressed()) {
+			MotorBoard.disableAllAmps(); // stop motors momentarily
+			for (int ii = 0; ii < MCBmodules_num; ii++) {
+				MotorBoard.setLEDG(ii, false);
+			}
+			while (MotorBoard.isMenuPressed()) {
+				//MotorBoard.modules.at(currentMotorSelected).setCountDesired(countDesired);
+				if (MotorBoard.isUpPressed()) {
+					MotorBoard.setLEDG(currentMotorSelected, false);
+					currentMotorSelected++;
+					if (currentMotorSelected > (MCBmodules_num-1)) { currentMotorSelected = 0; }
+					MotorBoard.setLEDG(currentMotorSelected, true);
+				}
+				else if (MotorBoard.isDownPressed()) {
+					MotorBoard.setLEDG(currentMotorSelected, false);
+					currentMotorSelected--;
+					if (currentMotorSelected < 0) { currentMotorSelected = (MCBmodules_num-1); }
+					MotorBoard.setLEDG(currentMotorSelected, true);
+				}
+				delayMicroseconds(500000); // wait for human's slow reaction time
+				MotorBoard.readButtons();
+			}
+			MotorBoard.enableAllAmps();
+		}
+		else if (MotorBoard.isUpPressed()) {
 			countDesired += buttonCountChange;
-			MotorBoard.modules.at(0).setCountDesired(countDesired);
+			MotorBoard.modules.at(currentMotorSelected).setCountDesired(countDesired);
 		}
 		else if (MotorBoard.isDownPressed()) {
 			countDesired -= buttonCountChange;
-			MotorBoard.modules.at(0).setCountDesired(countDesired);
+			MotorBoard.modules.at(currentMotorSelected).setCountDesired(countDesired);
 		}
-		else if (MotorBoard.isMenuPressed()) {
-			MotorBoard.disableAllAmps();
-		}
+		
 	}
 
-	buttonLedState = !buttonLedState;
-	MotorBoard.setLEDG(2, buttonLedState);
+	//buttonLedState = !buttonLedState;
+	//MotorBoard.setLEDG(2, buttonLedState);
 }

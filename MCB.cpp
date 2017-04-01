@@ -1,28 +1,10 @@
-/*=========================================================================//
-
-	MCB Class
-	
-	This class handles the modules plugged into the motor controller board
-	
-	Designed for use with Teensy 3.1 and Motor Control Board (Rev 1.1)
-	
-	
-	Trevor Bruns
-	
-	Changelog-
-		2/20/2016: Initial Creation
-		3/13/2017: Compiles and appears to run successfully
-		3/30/2017: Corrected byte order for setting DACs
-		
-//========================================================================*/
-
 #include "MCB.h"
 #include "MCBmodule.h"
 #include <ArduinoSTL.h> 
 #include "si5351.h"
 #include <SPI.h>
 
-MCB::MCB(uint8_t numModules)
+MCB::MCB(int8_t numModules)
 // will initialize modules using default pins (still need to call init after)
 	: DAC_(pins.csDAC)
 	, numModules_(numModules)	
@@ -32,12 +14,48 @@ MCB::MCB(uint8_t numModules)
 	DACval_.reserve(numModules_);
 }
 
+void MCB::waitForButtonHold(void)
+{
+	// initialize MCB pins (if not already)
+	if (!isPinsInit) {
+		pins.init();
+		isPinsInit = true;
+	}
+
+	uint32_t holdTime = 2000; // [ms] how long buttons must be held before function returns
+	uint32_t timeButtonsPressed = 0; // [ms] how long buttons have been held
+	uint32_t timeStart = 0;
+
+	// keep checking MCB buttons until Menu/Up/Down are all held for 2 seconds
+	while (timeButtonsPressed < holdTime) 
+	{
+		readButtons(); // check buttons
+		if (isDownPressed() && isUpPressed() && isMenuPressed())
+		{
+			if (timeButtonsPressed == 0) // if just pressed
+			{ 
+				timeStart = millis();
+				delay(1); // ensure next millis() call will be different
+			}
+
+			timeButtonsPressed = millis() - timeStart;
+		}
+		else {
+			timeButtonsPressed = 0;
+		}
+	}
+}
+
 void MCB::init(void)
 // initializes all modules (to be called only after all addModule commands)
 {
 
-	// initialize MCB pins
-	pins.init();
+	// initialize MCB pins (if not already)
+	if (!isPinsInit) {
+		pins.init();
+		isPinsInit = true;
+	}
+	
 
 	// initialize encoder clock for LS7366R
 	si5351_.init(SI5351_CRYSTAL_LOAD_8PF, 0);

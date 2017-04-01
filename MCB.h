@@ -13,7 +13,8 @@
 		2/20/2016: Initial Creation
 		3/13/2017: Moved MCBpin struct into its own class -> MCBpins.h
 				   Fixed all issues due to switching from vectors to arrays in MCBpins.h
-				   Compiles and appears to run successfully		
+				   Compiles and appears to run successfully
+		3/31/2017: Added waitForButtonHold()
 
 //=========================================================================*/
 
@@ -38,11 +39,12 @@ class MCB
 {	
 public:
 	
-	MCBpins pins;  // set up uC pin names for the MCB.
-	MCB(uint8_t numModules);	// will initialize modules using default pins (still need to call init after)
+	MCBpins pins;  // set up Teensy pins for the MCB
+	MCB(int8_t numModules);	// will initialize modules using default pins (still need to call init after)
 	~MCB(void);
 	std::vector<MCBmodule> modules; // each module controls a single motor
-	void init(void);	// initialize all modules (to be called after all addModule commands)
+	void waitForButtonHold(void); // pauses program until Menu/Up/Down are all held for 2 seconds
+	void init(void); // initialize all modules (to be called after all addModule commands)
 	void addModule(uint8_t position); // creates and adds module to <vector>modules
 	void disableAllAmps(void); // sets inhibit pin for motor amps
 	void enableAllAmps(void);  // NOTE: only enables n = numModules_
@@ -64,6 +66,7 @@ private:
 	uint8_t numModules_; // number of motor modules connected
 	uint8_t quadratureMode_; // counts per quadrature cycle (1x, 2x, 4x)
 	BoolVec LEDG_ = { false, false, false, false, false, false }; // Green LED status (true = on)
+	bool isPinsInit = false; // true after pins.init() has been called
 };
 
 #endif
