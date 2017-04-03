@@ -18,37 +18,42 @@
 // Motor Control Board
 const int8_t MCBmodules_num = 6; // number of modules (i.e. motors) plugged into this board
 MCB MotorBoard(MCBmodules_num);	// construct motor control board
+enum MCBstate{local, remote, idle};
+volatile MCBstate state = idle;
 int8_t currentMotorSelected = 0; // for manual control using Up/Down buttons
+IntervalTimer motorSelectLEDTimer;
+void motorSelectLEDISR(void);
+volatile bool motorSelectLEDState = false;
 
-// toggle LEDs for timing w/oscilloscope
-bool pidLedState = false;
-bool udpLedState = false;
-bool buttonLedState = false;
+// toggle LEDs for timing tests w/oscilloscope
+volatile bool pidLedState = false;
+volatile bool udpLedState = false;
+volatile bool buttonLedState = false;
 
 // PID timer interrupt
 IntervalTimer PIDTimer;
 void PIDTimerISR(void);
-uint32_t timeStepPID = 1000; // [us]
-float kp = 0.0004, ki = 0.000002, kd = 0.01; // work well for 1 kHz (1000 us)
+const uint32_t timeStepPID = 1000; // [us]
+const float kp = 0.0004, ki = 0.000002, kd = 0.01; // work well for 1 kHz (1000 us)
 //uint32_t timeStepPID = 500; // [us]
 //float kp = 0.0002, ki = 0.000001, kd = 0.01; // work ok for 2 kHz (500 us)
 
 // UDP timer interrupt
 IntervalTimer UDPTimer;
 void UDPTimerISR(void);
-uint32_t timeStepUDP = 5000; // [us]
+const uint32_t timeStepUDP = 5000; // [us]
 
 // Button read timer interrupt
 IntervalTimer buttonTimer;
 void buttonTimerISR(void);
-uint32_t timeStepButton = 10000; // [us]
-uint32_t buttonCountChange = 500; // [counts]
+const uint32_t timeStepButton = 10000; // [us]
+volatile uint32_t buttonCountChange = 500; // [counts]
 
 // sine wave trajectory
-float phase = 0.0;
+volatile float phase = 0.0;
 const int32_t sinAmplitude = 10000; // [counts]
 const float twopi = 2 * PI;
-int32_t countDesired = 0;
+volatile int32_t countDesired = 0;
 
 // Ethernet
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
@@ -75,6 +80,11 @@ void setup()
 	Ethernet.begin(mac, ip); // start Ethernet and UDP
 	Udp.begin(localPort);
 
+	attachInterrupt(MotorBoard.pins.CTRL, CTRLswitchISR, CHANGE);
+
+	CTRLswitchISR(); // call once to initialize 'state'
+
+	// NOTE: can only have max of 4 IntervalTimer objects running simultaneously on Teensy
 	PIDTimer.begin(PIDTimerISR, timeStepPID); // attach function and call every timeStepPID [us]
 	UDPTimer.begin(UDPTimerISR, timeStepUDP);
 	buttonTimer.begin(buttonTimerISR, timeStepButton);
@@ -91,7 +101,7 @@ void loop()
 
 void PIDTimerISR(void)
 {
-	cli(); // disable all interrupts to ensure this process completes sequentially
+	noInterrupts(); // disable all interrupts to ensure this process completes sequentially
 
 	//pidLedState = !pidLedState; // blink LED for timing with oscilloscope
 	//MotorBoard.setLEDG(0, pidLedState);
@@ -101,17 +111,14 @@ void PIDTimerISR(void)
 	//pidLedState = !pidLedState;
 	//MotorBoard.setLEDG(0, pidLedState);
 
-	sei();
+	interrupts();
 }
 
 //----------------------------------------------------------------//
 
 void UDPTimerISR(void)
 {
-	cli(); // disable all interrupts to ensure this process completes sequentially
-
-	//udpLedState = !udpLedState;
-	//MotorBoard.setLEDG(1, udpLedState);
+	noInterrupts(); // disable all interrupts to ensure this process completes sequentially
 
 	// if there's data available, read a packet
 	int packetSize = Udp.parsePacket();
@@ -124,22 +131,14 @@ void UDPTimerISR(void)
 
 		}
 	}
-
-	//udpLedState = !udpLedState;
-	//MotorBoard.setLEDG(1, udpLedState);
-
-	sei();
+	interrupts();
 }
 
 //----------------------------------------------------------------//
 
 void buttonTimerISR(void)
 {
-	//buttonLedState = !buttonLedState; // blink LED for timing with oscilloscope
-	//MotorBoard.setLEDG(2, buttonLedState);
-
-	// check Local <-> Remote switch on motherboard
-	if (!digitalReadFast(MotorBoard.pins.CTRL)) { // 'Remote' option
+	if (state == remote) {
 		// generate sin wave trajectory
 		for (int ii = 0; ii < MCBmodules_num; ii++)
 		{
@@ -150,7 +149,7 @@ void buttonTimerISR(void)
 		phase = phase + 0.02;
 		if (phase >= twopi) phase = 0.0;
 	}
-	else { // 'Local' option
+	else if (state == local) {
 		MotorBoard.readButtons();
 
 		if (MotorBoard.isMenuPressed()) {
@@ -158,6 +157,8 @@ void buttonTimerISR(void)
 			for (int ii = 0; ii < MCBmodules_num; ii++) {
 				MotorBoard.setLEDG(ii, false);
 			}
+			MotorBoard.setLEDG(currentMotorSelected, true);
+
 			while (MotorBoard.isMenuPressed()) {
 				//MotorBoard.modules.at(currentMotorSelected).setCountDesired(countDesired);
 				if (MotorBoard.isUpPressed()) {
@@ -172,9 +173,10 @@ void buttonTimerISR(void)
 					if (currentMotorSelected < 0) { currentMotorSelected = (MCBmodules_num-1); }
 					MotorBoard.setLEDG(currentMotorSelected, true);
 				}
-				delayMicroseconds(500000); // wait for human's slow reaction time
+				delayMicroseconds(400000); // wait for human's slow reaction time
 				MotorBoard.readButtons();
 			}
+			countDesired = MotorBoard.getCount(currentMotorSelected); // ensure we drive relative to current position
 			MotorBoard.enableAllAmps();
 		}
 		else if (MotorBoard.isUpPressed()) {
@@ -185,9 +187,24 @@ void buttonTimerISR(void)
 			countDesired -= buttonCountChange;
 			MotorBoard.modules.at(currentMotorSelected).setCountDesired(countDesired);
 		}
-		
 	}
+}
 
-	//buttonLedState = !buttonLedState;
-	//MotorBoard.setLEDG(2, buttonLedState);
+void motorSelectLEDISR(void) 
+{
+	motorSelectLEDState = !motorSelectLEDState;
+	MotorBoard.setLEDG(currentMotorSelected, motorSelectLEDState);
+}
+
+void CTRLswitchISR(void)
+{
+	state = (digitalReadFast(MotorBoard.pins.CTRL) ? local : remote);
+
+	if (state == local) {
+		motorSelectLEDTimer.begin(motorSelectLEDISR, 350000);
+		countDesired = MotorBoard.getCount(currentMotorSelected); // ensure we drive relative to current position
+	}
+	else if (state == remote) {
+		motorSelectLEDTimer.end();
+	}
 }
